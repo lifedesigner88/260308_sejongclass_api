@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { Form, Link, redirect, useActionData, useLoaderData, useNavigation } from 'react-router'
 import { Alert } from '../components/ui/alert'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
@@ -8,32 +8,121 @@ import { Input } from '../components/ui/input'
 import {
   type DeveloperTechStack,
   type TechStack,
+  assignMyTechStack,
+  createTechStack,
+  deleteTechStack,
+  removeMyTechStack,
+  updateTechStack,
 } from '../lib/api'
-import { useAuthMutations, useMe, useMyTechStacks, useSession, useTechStackMutations, useTechStacks } from '../lib/query-hooks'
+import { queryClient } from '../lib/query'
+import { getMeQueryOptions, getMyTechStacksQueryOptions, getTechStacksQueryOptions, queryKeys, useMe, useMyTechStacks, useTechStacks } from '../lib/query-hooks'
+import { clearSession, loadSession } from '../lib/session'
+
+type HomeLoaderData = {
+  session: NonNullable<ReturnType<typeof loadSession>>
+}
+
+type HomeActionData = {
+  error?: string
+  intent?: string
+  ok?: boolean
+}
+
+export async function loader(): Promise<HomeLoaderData> {
+  const session = loadSession()
+
+  if (!session) {
+    throw redirect('/login')
+  }
+
+  await Promise.all([
+    queryClient.ensureQueryData(getMeQueryOptions(session.accessToken)),
+    queryClient.ensureQueryData(getTechStacksQueryOptions(session.accessToken)),
+    queryClient.ensureQueryData(getMyTechStacksQueryOptions(session.accessToken)),
+  ])
+
+  return { session }
+}
+
+export async function action({ request }: { request: Request }): Promise<HomeActionData> {
+  const session = loadSession()
+
+  if (!session) {
+    throw redirect('/login')
+  }
+
+  const formData = await request.formData()
+  const intent = String(formData.get('intent') ?? '')
+
+  try {
+    switch (intent) {
+      case 'logout':
+        clearSession()
+        queryClient.clear()
+        throw redirect('/login')
+      case 'create':
+        await createTechStack(session.accessToken, {
+          name: String(formData.get('name') ?? ''),
+          category: String(formData.get('category') ?? '') || undefined,
+        })
+        break
+      case 'update':
+        await updateTechStack(session.accessToken, Number(formData.get('id')), {
+          name: String(formData.get('name') ?? ''),
+          category: String(formData.get('category') ?? '') || undefined,
+        })
+        break
+      case 'delete':
+        await deleteTechStack(session.accessToken, Number(formData.get('id')))
+        break
+      case 'assign':
+        await assignMyTechStack(session.accessToken, Number(formData.get('techStackId')))
+        break
+      case 'unassign':
+        await removeMyTechStack(session.accessToken, Number(formData.get('techStackId')))
+        break
+      default:
+        return { error: '알 수 없는 요청입니다.', intent }
+    }
+
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: queryKeys.techStacks }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.myTechStacks }),
+      queryClient.invalidateQueries({ queryKey: queryKeys.me }),
+    ])
+
+    return { ok: true, intent }
+  } catch (error) {
+    if (error instanceof Response) {
+      throw error
+    }
+
+    return {
+      error: error instanceof Error ? error.message : '요청 처리에 실패했습니다.',
+      intent,
+    }
+  }
+}
 
 export default function Home() {
-  const navigate = useNavigate()
+  const { session } = useLoaderData() as HomeLoaderData
+  const actionData = useActionData() as HomeActionData | undefined
+  const navigation = useNavigation()
   const [name, setName] = useState('')
   const [category, setCategory] = useState('')
   const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const { data: session } = useSession()
-  const { data: user, error: meError } = useMe(Boolean(session))
-  const { data: techStacks = [], error: techStackError, isLoading: isTechStacksLoading } = useTechStacks(Boolean(session))
-  const { data: myTechStacks = [], error: myTechStacksError, isLoading: isMyTechStacksLoading } = useMyTechStacks(Boolean(session))
-  const { create, update, delete: remove, assign, unassign } = useTechStackMutations()
-  const { logout } = useAuthMutations()
-  const isSubmitting = create.isPending || update.isPending
-
-  useEffect(() => {
-    if (!session) {
-      navigate('/login')
-    }
-  }, [navigate, session])
+  const { data: user, error: meError } = useMe(true)
+  const { data: techStacks = [], error: techStackError, isLoading: isTechStacksLoading } = useTechStacks(true)
+  const { data: myTechStacks = [], error: myTechStacksError, isLoading: isMyTechStacksLoading } = useMyTechStacks(true)
+  const activeIntent = navigation.formData?.get('intent')
+  const isSaving = navigation.state === 'submitting' && (activeIntent === 'create' || activeIntent === 'update')
 
   useEffect(() => {
     const nextError =
-      meError instanceof Error
+      actionData?.error
+        ? actionData.error
+        : meError instanceof Error
         ? meError.message
         : techStackError instanceof Error
           ? techStackError.message
@@ -41,63 +130,15 @@ export default function Home() {
             ? myTechStacksError.message
             : null
     setError(nextError)
-  }, [meError, myTechStacksError, techStackError])
+  }, [actionData?.error, meError, myTechStacksError, techStackError])
 
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault()
-
-    try {
-      setError(null)
-
-      if (editingId) {
-        await update.mutateAsync({
-          id: editingId,
-          payload: {
-            name,
-            category: category || undefined,
-          },
-        })
-      } else {
-        await create.mutateAsync({
-          name,
-          category: category || undefined,
-        })
-      }
-
+  useEffect(() => {
+    if (actionData?.ok && (actionData.intent === 'create' || actionData.intent === 'update')) {
       setName('')
       setCategory('')
       setEditingId(null)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '기술스택을 저장하지 못했습니다.')
     }
-  }
-
-  async function handleDeleteTechStack(id: number) {
-    try {
-      setError(null)
-      await remove.mutateAsync(id)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '기술스택을 삭제하지 못했습니다.')
-    }
-  }
-
-  async function handleAssign(techStackId: number) {
-    try {
-      setError(null)
-      await assign.mutateAsync(techStackId)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '기술스택을 추가하지 못했습니다.')
-    }
-  }
-
-  async function handleUnassign(techStackId: number) {
-    try {
-      setError(null)
-      await unassign.mutateAsync(techStackId)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '기술스택을 제거하지 못했습니다.')
-    }
-  }
+  }, [actionData])
 
   function startEdit(techStack: TechStack) {
     setEditingId(techStack.id)
@@ -109,11 +150,6 @@ export default function Home() {
     setEditingId(null)
     setName('')
     setCategory('')
-  }
-
-  function handleLogout() {
-    logout()
-    navigate('/login')
   }
 
   const assignedTechStackIds = useMemo(
@@ -136,9 +172,12 @@ export default function Home() {
         <Card style={{ minWidth: 280 }}>
           <CardContent style={{ paddingTop: 22 }}>
             <p className="muted" style={{ marginTop: 0 }}>현재 개발자</p>
-            <h3 style={{ margin: '4px 0 0' }}>{user?.full_name || user?.email || '세션 확인 중'}</h3>
-            <p className="muted" style={{ marginBottom: 16 }}>{user?.email}</p>
-            <Button variant="outline" onClick={handleLogout}>로그아웃</Button>
+            <h3 style={{ margin: '4px 0 0' }}>{user?.full_name || user?.email || session.user.email}</h3>
+            <p className="muted" style={{ marginBottom: 16 }}>{user?.email || session.user.email}</p>
+            <Form method="post">
+              <input type="hidden" name="intent" value="logout" />
+              <Button variant="outline">로그아웃</Button>
+            </Form>
           </CardContent>
         </Card>
       </div>
@@ -158,21 +197,25 @@ export default function Home() {
             <CardDescription>마스터 기술스택을 관리합니다. 수정 후 Query 캐시가 자동 갱신됩니다.</CardDescription>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleCreate} className="form-grid">
+            <Form method="post" className="form-grid">
+              <input type="hidden" name="intent" value={editingId ? 'update' : 'create'} />
+              {editingId && <input type="hidden" name="id" value={editingId} />}
               <Input
+                name="name"
                 placeholder="기술 이름"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
               />
               <Input
+                name="category"
                 placeholder="카테고리 (frontend, backend, infra)"
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
               />
               <div style={{ display: 'flex', gap: 8 }}>
-                <Button type="submit" disabled={isSubmitting}>
-                  {isSubmitting ? '저장 중...' : editingId ? '수정 저장' : '기술 추가'}
+                <Button type="submit" disabled={isSaving}>
+                  {isSaving ? '저장 중...' : editingId ? '수정 저장' : '기술 추가'}
                 </Button>
                 {editingId && (
                   <Button type="button" variant="secondary" onClick={cancelEdit}>
@@ -180,7 +223,7 @@ export default function Home() {
                   </Button>
                 )}
               </div>
-            </form>
+            </Form>
           </CardContent>
         </Card>
 
@@ -203,9 +246,11 @@ export default function Home() {
                       )}
                     </div>
                     <div className="stack-row-actions">
-                      <Button variant="outline" onClick={() => handleUnassign(item.tech_stack_id)}>
-                        내 목록에서 제거
-                      </Button>
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="unassign" />
+                        <input type="hidden" name="techStackId" value={item.tech_stack_id} />
+                        <Button variant="outline">내 목록에서 제거</Button>
+                      </Form>
                     </div>
                   </div>
                 ))}
@@ -239,15 +284,22 @@ export default function Home() {
                     )}
                   </div>
                   <div className="stack-row-actions">
-                    <Button
-                      variant={assignedTechStackIds.has(techStack.id) ? 'secondary' : 'default'}
-                      disabled={assignedTechStackIds.has(techStack.id)}
-                      onClick={() => handleAssign(techStack.id)}
-                    >
-                      {assignedTechStackIds.has(techStack.id) ? '보유 중' : '내 기술로 추가'}
-                    </Button>
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="assign" />
+                      <input type="hidden" name="techStackId" value={techStack.id} />
+                      <Button
+                        variant={assignedTechStackIds.has(techStack.id) ? 'secondary' : 'default'}
+                        disabled={assignedTechStackIds.has(techStack.id)}
+                      >
+                        {assignedTechStackIds.has(techStack.id) ? '보유 중' : '내 기술로 추가'}
+                      </Button>
+                    </Form>
                     <Button variant="outline" onClick={() => startEdit(techStack)}>수정</Button>
-                    <Button variant="destructive" onClick={() => handleDeleteTechStack(techStack.id)}>삭제</Button>
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="delete" />
+                      <input type="hidden" name="id" value={techStack.id} />
+                      <Button variant="destructive">삭제</Button>
+                    </Form>
                   </div>
                 </div>
               ))}

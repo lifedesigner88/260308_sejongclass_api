@@ -20,6 +20,31 @@ export const queryKeys = {
   myTechStacks: ['my-tech-stacks'] as const,
 }
 
+export function getMeQueryOptions(token: string) {
+  return {
+    queryKey: queryKeys.me,
+    queryFn: async () => {
+      const user = await fetchMe(token)
+      saveSession({ accessToken: token, user })
+      return user
+    },
+  }
+}
+
+export function getTechStacksQueryOptions(token: string) {
+  return {
+    queryKey: queryKeys.techStacks,
+    queryFn: async () => fetchTechStacks(token),
+  }
+}
+
+export function getMyTechStacksQueryOptions(token: string) {
+  return {
+    queryKey: queryKeys.myTechStacks,
+    queryFn: async () => fetchMyTechStacks(token),
+  }
+}
+
 function requireToken() {
   const session = loadSession()
   if (!session) {
@@ -38,30 +63,22 @@ export function useSession() {
 
 export function useMe(enabled: boolean) {
   return useQuery({
-    queryKey: queryKeys.me,
     enabled,
-    queryFn: async () => {
-      const token = requireToken()
-      const user = await fetchMe(token)
-      saveSession({ accessToken: token, user })
-      return user
-    },
+    ...getMeQueryOptions(requireToken()),
   })
 }
 
 export function useTechStacks(enabled: boolean) {
   return useQuery({
-    queryKey: queryKeys.techStacks,
     enabled,
-    queryFn: async () => fetchTechStacks(requireToken()),
+    ...getTechStacksQueryOptions(requireToken()),
   })
 }
 
 export function useMyTechStacks(enabled: boolean) {
   return useQuery({
-    queryKey: queryKeys.myTechStacks,
     enabled,
-    queryFn: async () => fetchMyTechStacks(requireToken()),
+    ...getMyTechStacksQueryOptions(requireToken()),
   })
 }
 

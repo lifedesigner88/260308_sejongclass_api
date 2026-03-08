@@ -1,50 +1,61 @@
-import { useEffect, useState } from 'react'
-import { Link, useNavigate } from 'react-router'
+import { useState } from 'react'
+import { Form, Link, redirect, useActionData, useNavigation } from 'react-router'
 import { Alert } from '../components/ui/alert'
 import { Button } from '../components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input'
-import { useAuthMutations } from '../lib/query-hooks'
-import { loadSession } from '../lib/session'
+import { loginUser, registerUser } from '../lib/api'
+import { clearSession, loadSession, saveSession } from '../lib/session'
 
 type Mode = 'login' | 'register'
+type LoginActionData = {
+  error?: string
+}
 
-export default function Login() {
-  const navigate = useNavigate()
-  const existingSession = loadSession()
-  const [mode, setMode] = useState<Mode>('login')
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [fullName, setFullName] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const { login, register } = useAuthMutations()
-  const isSubmitting = login.isPending || register.isPending
+export async function loader() {
+  if (loadSession()) {
+    throw redirect('/')
+  }
 
-  useEffect(() => {
-    if (existingSession) {
-      navigate('/')
+  return null
+}
+
+export async function action({ request }: { request: Request }): Promise<LoginActionData> {
+  const formData = await request.formData()
+  const mode = formData.get('mode')
+  const email = String(formData.get('email') ?? '')
+  const password = String(formData.get('password') ?? '')
+  const fullName = String(formData.get('fullName') ?? '')
+
+  try {
+    const response = await (mode === 'register'
+      ? registerUser({
+          email,
+          password,
+          full_name: fullName || undefined,
+        })
+      : loginUser({ email, password }))
+
+    saveSession({ accessToken: response.access_token, user: response.user })
+    throw redirect('/')
+  } catch (error) {
+    if (error instanceof Response) {
+      throw error
     }
-  }, [existingSession, navigate])
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setError(null)
+    clearSession()
 
-    try {
-      await (
-        mode === 'login'
-          ? login.mutateAsync({ email, password })
-          : register.mutateAsync({
-              email,
-              password,
-              full_name: fullName || undefined,
-            })
-      )
-      navigate('/')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '인증 처리에 실패했습니다.')
+    return {
+      error: error instanceof Error ? error.message : '인증 처리에 실패했습니다.',
     }
   }
+}
+
+export default function Login() {
+  const [mode, setMode] = useState<Mode>('login')
+  const actionData = useActionData() as LoginActionData | undefined
+  const navigation = useNavigation()
+  const isSubmitting = navigation.state === 'submitting'
 
   return (
     <div className="auth-layout">
@@ -65,35 +76,33 @@ export default function Login() {
             </Button>
           </div>
 
-          {error && <Alert style={{ marginBottom: 16 }}>{error}</Alert>}
+          {actionData?.error && <Alert style={{ marginBottom: 16 }}>{actionData.error}</Alert>}
 
-          <form onSubmit={handleSubmit} className="form-grid">
+          <Form method="post" className="form-grid">
+            <input type="hidden" name="mode" value={mode} />
             {mode === 'register' && (
               <Input
+                name="fullName"
                 placeholder="이름 (선택)"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
               />
             )}
             <Input
+              name="email"
               type="email"
               placeholder="이메일"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
               required
             />
             <Input
+              name="password"
               type="password"
               placeholder="비밀번호 (8자 이상)"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
               required
               minLength={8}
             />
             <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? '처리 중...' : mode === 'login' ? '로그인' : '회원가입'}
             </Button>
-          </form>
+          </Form>
 
           <p className="muted" style={{ marginTop: 16 }}>
             <Link to="/about">구조 설명 보기</Link>
