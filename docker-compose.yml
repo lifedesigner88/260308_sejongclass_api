@@ -26,14 +26,10 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
+    env_file:
+      - ./backend/.env
     environment:
       - PYTHONUNBUFFERED=1
-      - DATABASE_URL=postgresql+asyncpg://postgres:password@db:5432/appdb
-      - BACKEND_CORS_ORIGINS=http://localhost:3000
-      - SQL_ECHO=true
-      - JWT_SECRET_KEY=dev-secret-change-me
-      - JWT_ALGORITHM=HS256
-      - ACCESS_TOKEN_EXPIRE_MINUTES=60
     depends_on:
       db:
         condition: service_healthy

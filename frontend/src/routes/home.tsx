@@ -28,6 +28,10 @@ type HomeActionData = {
   ok?: boolean
 }
 
+function isAuthFailure(error: unknown) {
+  return error instanceof Error && error.message === 'Invalid or expired token'
+}
+
 export async function loader(): Promise<HomeLoaderData> {
   const session = loadSession()
 
@@ -35,11 +39,21 @@ export async function loader(): Promise<HomeLoaderData> {
     throw redirect('/login')
   }
 
-  await Promise.all([
-    queryClient.ensureQueryData(getMeQueryOptions(session.accessToken)),
-    queryClient.ensureQueryData(getTechStacksQueryOptions(session.accessToken)),
-    queryClient.ensureQueryData(getMyTechStacksQueryOptions(session.accessToken)),
-  ])
+  try {
+    await Promise.all([
+      queryClient.ensureQueryData(getMeQueryOptions(session.accessToken)),
+      queryClient.ensureQueryData(getTechStacksQueryOptions(session.accessToken)),
+      queryClient.ensureQueryData(getMyTechStacksQueryOptions(session.accessToken)),
+    ])
+  } catch (error) {
+    if (isAuthFailure(error)) {
+      clearSession()
+      queryClient.clear()
+      throw redirect('/login')
+    }
+
+    throw error
+  }
 
   return { session }
 }
@@ -95,6 +109,12 @@ export async function action({ request }: { request: Request }): Promise<HomeAct
   } catch (error) {
     if (error instanceof Response) {
       throw error
+    }
+
+    if (isAuthFailure(error)) {
+      clearSession()
+      queryClient.clear()
+      throw redirect('/login')
     }
 
     return {
