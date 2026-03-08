@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.env
+*.egg-info/
+dist/
+build/
+
+# uv
+.python-version
+
+# Node.js
+node_modules/
+npm-debug.log*
+.pnpm-debug.log*
+
+# Build outputs
+frontend/dist/
+frontend/build/
+frontend/.react-router/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.local/
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+*.log
+logs/
